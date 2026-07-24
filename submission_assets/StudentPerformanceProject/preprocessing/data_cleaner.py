@@ -2,8 +2,7 @@
 preprocessing/data_cleaner.py
 ==============================
 Transforms the raw UCI "Student Performance" dataset (student-mat.csv)
-into a cleaned, analysis-ready CSV, WITHOUT ever modifying the original
-raw file.
+into a cleaned, analysis-ready CSV.
 """
 
 import csv
@@ -14,7 +13,7 @@ from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-_STUDYTIME_CODE_TO_HOURS: dict[str, float] = {
+_STUDYTIME_CODE_TO_HOURS = {
     "1": 1.5,
     "2": 3.5,
     "3": 7.5,
@@ -23,94 +22,147 @@ _STUDYTIME_CODE_TO_HOURS: dict[str, float] = {
 
 
 class DataCleaningError(Exception):
-    """Raised when the raw dataset cannot be cleaned due to a structural problem."""
+    """Raised when dataset cleaning fails."""
 
 
 def _convert_studytime_code(code: str) -> float:
-    """Convert a raw studytime code ("1"-"4") into representative weekly study hours."""
-    try:
-        return _STUDYTIME_CODE_TO_HOURS[code.strip()]
-    except KeyError as exc:
-        raise DataCleaningError(
-            f"Unexpected studytime code encountered: {code!r}"
-        ) from exc
+    """Convert UCI studytime code (1-4) into representative study hours."""
+    code = str(code).strip()
+
+    if code not in _STUDYTIME_CODE_TO_HOURS:
+        raise DataCleaningError(f"Invalid studytime code: {code}")
+
+    return _STUDYTIME_CODE_TO_HOURS[code]
 
 
 def _calculate_attendance_percentage(absences: int) -> float:
-    """Derive an attendance percentage from a raw absence count."""
-    attended_sessions = config.ASSUMED_TOTAL_CLASS_SESSIONS - absences
-    percentage = (attended_sessions / config.ASSUMED_TOTAL_CLASS_SESSIONS) * 100
-    return max(0.0, min(100.0, round(percentage, 2)))
+    """Convert absences into attendance percentage."""
+    attended = config.ASSUMED_TOTAL_CLASS_SESSIONS - absences
+    percentage = (attended / config.ASSUMED_TOTAL_CLASS_SESSIONS) * 100
+    return round(max(0.0, min(100.0, percentage)), 2)
 
 
-def clean_dataset(raw_path: Path = config.RAW_DATASET_PATH,
-                   processed_path: Path = config.PROCESSED_DATASET_PATH) -> int:
-    """
-    Read the raw UCI dataset, clean/derive fields, and write the result
-    to the processed dataset path.
-    """
+def clean_dataset(
+    raw_path: Path = config.RAW_DATASET_PATH,
+    processed_path: Path = config.PROCESSED_DATASET_PATH,
+) -> int:
+
     if not raw_path.exists():
         raise DataCleaningError(
-            f"Raw dataset not found at '{raw_path}'. Please download "
-            "student-mat.csv from the UCI Machine Learning Repository "
-            "(or the equivalent Kaggle mirror) and place it at this path. "
-            "See README.md for exact download instructions."
+            f"Dataset not found:\n{raw_path}\n\n"
+            "Download student-mat.csv from the UCI repository."
         )
 
-    required_columns = {"age", "sex", "school", "studytime", "absences", "G1", "G2", "G3"}
+    required_columns = {
+        "school",
+        "sex",
+        "age",
+        "studytime",
+        "absences",
+        "G1",
+        "G2",
+        "G3",
+    }
 
-    cleaned_rows: list[dict] = []
+    cleaned_rows = []
 
-    logger.info("Starting dataset cleaning from raw file: %s", raw_path)
+    logger.info("Reading dataset: %s", raw_path)
 
-    with open(raw_path, mode="r", encoding="utf-8", newline="") as raw_file:
-        reader = csv.DictReader(raw_file, delimiter=config.RAW_CSV_DELIMITER)
+    with open(raw_path, "r", encoding="utf-8", newline="") as raw_file:
+
+        reader = csv.DictReader(
+            raw_file,
+            delimiter=config.RAW_CSV_DELIMITER,
+        )
 
         if reader.fieldnames is None:
-            raise DataCleaningError("Raw dataset appears to be empty (no header row found).")
+            raise DataCleaningError("CSV file is empty.")
 
-        missing_columns = required_columns - set(reader.fieldnames)
-        if missing_columns:
+        reader.fieldnames = [field.strip() for field in reader.fieldnames]
+
+        missing = required_columns - set(reader.fieldnames)
+
+        if missing:
             raise DataCleaningError(
-                f"Raw dataset is missing required columns: {sorted(missing_columns)}. "
-                "Confirm the file is the correct UCI student-mat.csv dataset."
+                f"Missing required columns: {sorted(missing)}"
             )
 
-        for row_number, row in enumerate(reader, start=1):
+        for row_number, row in enumerate(reader, start=2):
+
+            # Skip completely empty rows
+            if not row:
+                logger.warning("Skipping empty row %d", row_number)
+                continue
+
+            # Skip malformed rows
+            if any(value is None for value in row.values()):
+                logger.warning("Skipping malformed row %d", row_number)
+                continue
+
             try:
-                absences = int(row["absences"])
-                cleaned_rows.append(
-                    {
-                        "student_id": row_number,
-                        "school": row["school"].strip(),
-                        "sex": row["sex"].strip(),
-                        "age": int(row["age"]),
-                        "study_hours": _convert_studytime_code(row["studytime"]),
-                        "absences": absences,
-                        "attendance_percentage": _calculate_attendance_percentage(absences),
-                        "grade_1": float(row["G1"]),
-                        "grade_2": float(row["G2"]),
-                        "final_grade": float(row["G3"]),
-                    }
+
+                absences = int(row["absences"].strip())
+
+                cleaned_row = {
+                    "student_id": row_number - 1,
+                    "school": row["school"].strip(),
+                    "sex": row["sex"].strip(),
+                    "age": int(row["age"].strip()),
+                    "study_hours": _convert_studytime_code(
+                        row["studytime"]
+                    ),
+                    "absences": absences,
+                    "attendance_percentage": _calculate_attendance_percentage(
+                        absences
+                    ),
+                    "grade_1": float(row["G1"].strip()),
+                    "grade_2": float(row["G2"].strip()),
+                    "final_grade": float(row["G3"].strip()),
+                }
+
+                cleaned_rows.append(cleaned_row)
+
+            except (
+                ValueError,
+                TypeError,
+                KeyError,
+                AttributeError,
+                DataCleaningError,
+            ) as err:
+
+                logger.warning(
+                    "Skipping row %d because of invalid data: %s",
+                    row_number,
+                    err,
                 )
-            except (ValueError, DataCleaningError) as row_error:
-                logger.warning("Skipping malformed row %d: %s", row_number, row_error)
+
                 continue
 
     if not cleaned_rows:
-        raise DataCleaningError("No valid rows could be cleaned from the raw dataset.")
+        raise DataCleaningError(
+            "No valid records were found in the dataset."
+        )
 
     processed_path.parent.mkdir(parents=True, exist_ok=True)
 
-    fieldnames = list(cleaned_rows[0].keys())
-    with open(processed_path, mode="w", encoding="utf-8", newline="") as processed_file:
-        writer = csv.DictWriter(processed_file, fieldnames=fieldnames)
+    with open(
+        processed_path,
+        "w",
+        encoding="utf-8",
+        newline="",
+    ) as processed_file:
+
+        writer = csv.DictWriter(
+            processed_file,
+            fieldnames=cleaned_rows[0].keys(),
+        )
+
         writer.writeheader()
         writer.writerows(cleaned_rows)
 
     logger.info(
-        "Dataset cleaning complete. %d records written to %s",
-        len(cleaned_rows), processed_path
+        "Cleaning completed successfully. %d rows written.",
+        len(cleaned_rows),
     )
 
     return len(cleaned_rows)
