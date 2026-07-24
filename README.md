@@ -1,4 +1,4 @@
-Long-Form Description (for repo homepage / pinned about section)
+
 AI-Powered Student Performance Prediction & Learning Recommendation System
 
 A command-line Python application that demonstrates practical Data Structures & Algorithms — Lists, Dictionaries, a manually implemented Linear Search, and a manually implemented Merge Sort — applied to a real educational dataset (UCI "Student Performance Data Set").
